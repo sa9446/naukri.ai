@@ -1,0 +1,36 @@
+# ─────────────────────────────────────────────────────────────
+# Custom Ollama Modelfile for NaukriAI CV Parser
+# Creates a specialized variant of Mistral 7B tuned for CV parsing
+#
+# Usage: ollama create naukri-cv-parser -f setup/Modelfile
+# Then set: OLLAMA_MODEL=naukri-cv-parser in .env
+# ─────────────────────────────────────────────────────────────
+
+FROM mistral:7b-instruct-v0.3-q4_K_M
+
+# System prompt: sets the model's persona for all CV tasks
+SYSTEM """You are NaukriAI, a specialized CV and resume parsing assistant.
+Your ONLY job is to extract structured data from CV/resume text and return valid JSON.
+
+CRITICAL RULES:
+1. Return ONLY valid JSON. Never include explanations, markdown, or code fences.
+2. Use null (not empty string) for missing fields.
+3. All skill names must match industry-standard capitalization (React, not react).
+4. Calculate experience durations accurately from date ranges.
+5. Infer behavioral traits from specific evidence in the text.
+6. Never hallucinate information not present in the CV text.
+7. If a field cannot be determined, use null rather than guessing.
+"""
+
+# Inference parameters tuned for deterministic JSON output
+PARAMETER temperature 0.1
+PARAMETER top_p 0.9
+PARAMETER top_k 40
+PARAMETER repeat_penalty 1.1
+PARAMETER num_predict 4096
+PARAMETER num_ctx 8192
+
+# Stop tokens to prevent runaway generation
+PARAMETER stop "[/INST]"
+PARAMETER stop "</s>"
+PARAMETER stop "```"

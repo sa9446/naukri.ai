@@ -1,0 +1,182 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Enums ───────────────────────────────────────────────────────────────────
+
+enum Role {
+  JOB_SEEKER
+  RECRUITER
+}
+
+enum JobSource {
+  LINKEDIN
+  NAUKRI
+  MANUAL
+  INDEED
+}
+
+enum ApplicationStatus {
+  PENDING
+  REVIEWED
+  SHORTLISTED
+  REJECTED
+}
+
+// ─── Core Models ─────────────────────────────────────────────────────────────
+
+model User {
+  id        String   @id @default(uuid())
+  email     String   @unique
+  password  String
+  role      Role     @default(JOB_SEEKER)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  jobSeekerProfile JobSeekerProfile?
+  recruiterProfile RecruiterProfile?
+
+  @@index([email])
+  @@map("users")
+}
+
+model JobSeekerProfile {
+  id        String   @id @default(uuid())
+  userId    String   @unique
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  firstName String?
+  lastName  String?
+  phone     String?
+  location  String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  cvs CV[]
+
+  @@map("job_seeker_profiles")
+}
+
+model RecruiterProfile {
+  id          String   @id @default(uuid())
+  userId      String   @unique
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  firstName   String?
+  lastName    String?
+  companyName String?
+  industry    String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  jobPostings JobPosting[]
+
+  @@map("recruiter_profiles")
+}
+
+// ─── CV Models ────────────────────────────────────────────────────────────────
+
+model CV {
+  id                 String           @id @default(uuid())
+  jobSeekerProfileId String
+  jobSeekerProfile   JobSeekerProfile @relation(fields: [jobSeekerProfileId], references: [id], onDelete: Cascade)
+  filename           String
+  originalName       String
+  mimeType           String
+  fileSize           Int
+  rawText            String           @db.Text
+  uploadedAt         DateTime         @default(now())
+
+  candidateAnalysis CandidateAnalysis?
+  jobMatches        JobMatch[]
+
+  @@index([jobSeekerProfileId])
+  @@map("cvs")
+}
+
+model CandidateAnalysis {
+  id              String   @id @default(uuid())
+  cvId            String   @unique
+  cv              CV       @relation(fields: [cvId], references: [id], onDelete: Cascade)
+
+  // Structured data extracted by AI (stored as JSON from LLM API response)
+  fullName        String?
+  email           String?
+  phone           String?
+  location        String?
+  summary         String?  @db.Text
+  skills          String[]
+  experience      Float    @default(0) // total years
+  experienceJson  Json     // array of {company, role, duration, description}
+  education       Json     // array of {degree, institution, year}
+  certifications  String[]
+  languages       String[]
+  domainExpertise String[]
+  highlights      String[] @default([])
+  behavioralFit   Json     // {traits: [], workStyle: string, teamPlayer: bool}
+  embedding       Float[]  // vector embedding of the CV text
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("candidate_analyses")
+}
+
+// ─── Job Models ───────────────────────────────────────────────────────────────
+
+model JobPosting {
+  id                 String           @id @default(uuid())
+  recruiterProfileId String?
+  recruiterProfile   RecruiterProfile? @relation(fields: [recruiterProfileId], references: [id])
+
+  title              String
+  company            String
+  description        String           @db.Text
+  requiredSkills     String[]
+  experienceMin      Float            @default(0)  // years
+  experienceMax      Float            @default(99) // years
+  location           String?
+  salary             String?
+  jobType            String?          // "full-time", "part-time", "contract"
+  domain             String?
+  source             JobSource        @default(MANUAL)
+  sourceUrl          String?
+  sourceId           String?          // external ID from platform
+  embedding          Float[]          // vector embedding of job description
+  isActive           Boolean          @default(true)
+  postedAt           DateTime         @default(now())
+  expiresAt          DateTime?
+
+  jobMatches JobMatch[]
+
+  @@unique([source, sourceId])
+  @@index([isActive, postedAt])
+  @@index([requiredSkills])
+  @@map("job_postings")
+}
+
+model JobMatch {
+  id           String            @id @default(uuid())
+  cvId         String
+  cv           CV                @relation(fields: [cvId], references: [id], onDelete: Cascade)
+  jobId        String
+  job          JobPosting        @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  matchScore   Float             // 0.0 - 1.0 (only stored if >= MIN_MATCH_SCORE)
+  skillsScore  Float
+  experienceScore Float
+  domainScore  Float
+  behavioralScore Float
+  matchReasons Json              // {skills: [], experience: string, domain: string, behavioral: string}
+  status       ApplicationStatus @default(PENDING)
+
+  createdAt DateTime @default(now())
+
+  @@unique([cvId, jobId])
+  @@index([cvId, matchScore])
+  @@index([jobId, matchScore])
+  @@map("job_matches")
+}
