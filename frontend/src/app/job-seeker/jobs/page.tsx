@@ -139,13 +139,13 @@ export default function BrowseJobsPage() {
                         </span>
                       </div>
                       <div className="flex flex-wrap gap-1.5 mt-2">
-                        {job.requiredSkills.slice(0, 6).map((s) => (
-                          <span key={s} className="bg-gray-50 border text-gray-600 px-2 py-0.5 rounded-full text-xs">
+                        {[...new Set(job.requiredSkills)].slice(0, 6).map((s, i) => (
+                          <span key={`${s}-${i}`} className="bg-gray-50 border text-gray-600 px-2 py-0.5 rounded-full text-xs">
                             {s}
                           </span>
                         ))}
-                        {job.requiredSkills.length > 6 && (
-                          <span className="text-xs text-gray-400">+{job.requiredSkills.length - 6} more</span>
+                        {[...new Set(job.requiredSkills)].length > 6 && (
+                          <span className="text-xs text-gray-400">+{[...new Set(job.requiredSkills)].length - 6} more</span>
                         )}
                       </div>
                     </div>

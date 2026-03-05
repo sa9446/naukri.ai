@@ -107,6 +107,7 @@ class RuleBasedExtractor:
             "fullName": self.extract_name(text),
             "email": self.extract_email(text),
             "phone": self.extract_phone(text),
+            "location": self.extract_location(text),
             "skills": self.extract_skills(text),
             "totalExperienceYears": self.calculate_total_experience(text),
             "experience": self.extract_experience_entries(text),
@@ -172,6 +173,32 @@ class RuleBasedExtractor:
                 break
 
         return highlights[:6]
+
+    def extract_location(self, text: str) -> Optional[str]:
+        """Extract location from CV header lines."""
+        # Search entire header (first 500 chars) for city/country patterns
+        header = text[:500]
+        location_pattern = re.compile(
+            r"\b(?:Abu Dhabi|Mumbai|Delhi|Bangalore|Bengaluru|Hyderabad|Pune|Chennai|"
+            r"Kolkata|Noida|Gurugram|Gurgaon|Ahmedabad|Jaipur|Chandigarh|"
+            r"New York|San Francisco|London|Singapore|Dubai|Toronto|Sydney|Berlin|"
+            r"Remote|Worldwide)\b"
+            r"(?:[,\s]+(?:India|USA|UK|US|Canada|Australia|Germany|UAE|Singapore))?",
+            re.IGNORECASE
+        )
+        m = location_pattern.search(header)
+        if m:
+            return m.group().strip()
+        # Fallback: "Word, Word" pattern (City, Country) in header, not on email/phone line
+        lines = [l.strip() for l in text.split("\n") if l.strip()][:10]
+        generic_pattern = re.compile(
+            r"\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?),\s*([A-Z]{2,3}|[A-Z][a-z]+)\b"
+        )
+        for line in lines:
+            m = generic_pattern.search(line)
+            if m and not re.search(r"\d|@|http", line):
+                return m.group()
+        return None
 
     def extract_email(self, text: str) -> Optional[str]:
         pattern = r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}"
@@ -276,40 +303,158 @@ class RuleBasedExtractor:
         return 0.0
 
     def extract_experience_entries(self, text: str) -> list:
-        """Extract individual job entries as structured dicts."""
-        entries = []
-        # Match job title + company + date range patterns
-        pattern = r"""
-            (?P<role>[A-Z][A-Za-z\s/\-&,]+(?:Engineer|Developer|Manager|Lead|Analyst|
-                                               Designer|Consultant|Director|Officer|
-                                               Architect|Scientist|Specialist|Head)
-            )\s*(?:at|@|,|\n)\s*
-            (?P<company>[A-Z][A-Za-z\s\.,&'-]{2,50})
         """
-        for m in re.finditer(pattern, text, re.VERBOSE):
-            entries.append({
-                "role": m.group("role").strip(),
-                "company": m.group("company").strip(),
-                "startDate": None,
-                "endDate": None,
-                "durationYears": 0,
-                "description": "",
-            })
+        Extract job entries by looking for lines with BOTH a role title AND a date range.
+        This avoids false positives from section headers or competency lists.
+        """
+        entries = []
+        seen = set()
 
-        return entries[:10]  # max 10 entries from rules
+        # Date range pattern (reusable)
+        DATE_MONTHS = r"(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)"
+        DATE_RANGE = re.compile(
+            rf"({DATE_MONTHS}\s+\d{{4}}|\d{{4}})\s*[–—\-]+\s*({DATE_MONTHS}\s+\d{{4}}|\d{{4}}|Present|Current|Now)",
+            re.IGNORECASE
+        )
+
+        ROLE_KEYWORDS = re.compile(
+            r"(?i)\b(Consultant|Director|Manager|Lead|Engineer|Analyst|Specialist|"
+            r"Architect|Officer|Scientist|Developer|Head|Executive|President|"
+            r"Principal|Coordinator|Advisor|Transformation Leader|Integration Leader|"
+            r"Delivery Leader|Strategist)\b"
+        )
+
+        # Look for lines that contain BOTH a role keyword AND a date range
+        lines = text.split("\n")
+        for i, line in enumerate(lines):
+            line = line.strip()
+            date_match = DATE_RANGE.search(line)
+            if not date_match:
+                continue
+
+            # Use text before the date range as role+company context
+            pre_date = line[:date_match.start()].strip().rstrip("|–— ")
+
+            # Only consider short lines (< 200 chars) to avoid bullet points
+            # Also require a role keyword in the pre-date text
+            if len(pre_date) > 200:
+                continue
+            role_kw = ROLE_KEYWORDS.search(pre_date)
+            if not role_kw:
+                # Check line above as fallback (role might be on prev line)
+                if i > 0:
+                    prev = lines[i-1].strip()
+                    role_kw = ROLE_KEYWORDS.search(prev)
+                    if role_kw:
+                        pre_date = prev
+                    else:
+                        continue
+                else:
+                    continue
+
+            # Split on "–" (en-dash) to separate role_part from location
+            # e.g. "ROLE Company – Location" → pre = "ROLE Company"
+            parts = re.split(r"\s*[–—]\s*", pre_date)
+            role_section = parts[0].strip()   # "ROLE Company" or "ROLE – MORE TITLE Company"
+
+            # If the role_section contains multiple "–" parts, try to rejoin smartly
+            if len(parts) >= 2 and ROLE_KEYWORDS.search(parts[1]):
+                role_section = f"{parts[0]} – {parts[1]}"
+
+            # Extract role: everything up to and including the last role keyword
+            kw_match = None
+            for m in ROLE_KEYWORDS.finditer(role_section):
+                kw_match = m
+            if not kw_match:
+                continue
+
+            role_text = role_section[:kw_match.end()].strip()
+            # Company: text after the role keyword (short, before any dash)
+            after_kw = role_section[kw_match.end():].strip()
+            company_text = re.match(r"([A-Z][A-Za-z0-9&\.\s]{1,25})", after_kw)
+            company = company_text.group(1).strip() if company_text else ""
+
+            start_raw = date_match.group(1)
+            end_raw = date_match.group(2)
+
+            key = role_text.lower().strip()
+            if key not in seen and len(role_text) > 3:
+                seen.add(key)
+                entries.append({
+                    "role": role_text,
+                    "company": company,
+                    "startDate": self._normalize_date_str(start_raw),
+                    "endDate": "Present" if end_raw.lower() in ("present", "current", "now") else self._normalize_date_str(end_raw),
+                    "durationYears": 0,
+                    "description": "",
+                })
+
+        return entries[:10]
+
+    def _normalize_date_str(self, s: str) -> Optional[str]:
+        """Convert 'March 2021' or '2021' to 'YYYY-MM' or 'YYYY'."""
+        MONTHS = {"january": "01", "february": "02", "march": "03", "april": "04",
+                  "may": "05", "june": "06", "july": "07", "august": "08",
+                  "september": "09", "october": "10", "november": "11", "december": "12",
+                  "jan": "01", "feb": "02", "mar": "03", "apr": "04",
+                  "jun": "06", "jul": "07", "aug": "08", "sep": "09",
+                  "oct": "10", "nov": "11", "dec": "12"}
+        s = s.strip()
+        m = re.match(r"([A-Za-z]+)\s+(\d{4})", s)
+        if m:
+            month = MONTHS.get(m.group(1).lower(), "01")
+            return f"{m.group(2)}-{month}"
+        m = re.match(r"(\d{4})", s)
+        if m:
+            return m.group(1)
+        return s
 
     def extract_education(self, text: str) -> list:
-        """Extract education entries."""
+        """Extract education entries scoped to the Education section."""
         entries = []
-        degree_pattern = r"(?i)(Bachelor|Master|B\.?Tech|M\.?Tech|B\.?E|M\.?E|" \
-                         r"B\.?Sc|M\.?Sc|Ph\.?D|MBA|BCA|MCA|B\.?Com|M\.?Com)" \
-                         r"[^.\n]{0,80}"
-        for m in re.finditer(degree_pattern, text):
-            entries.append({
-                "degree": m.group().strip(),
-                "institution": None,
-                "year": None,
-            })
+
+        # Scope to the Education section if present
+        edu_section = text
+        edu_match = re.search(
+            r"(?i)(?:^|\n)[ \t]*(?:EDUCATION|ACADEMIC|QUALIFICATION)\b[^\n]*\n(.*?)(?=\n[ \t]*[A-Z][A-Z &\-]{3,}\n|$)",
+            text, re.DOTALL
+        )
+        if edu_match:
+            edu_section = edu_match.group(1)
+
+        # Require full-word matches — don't match "MBA" in "Mumbai", "Master" in "Scrum Master"
+        # Negative lookbehind for "Scrum" to avoid matching "Scrum Master"
+        degree_pattern = re.compile(
+            r"(?i)(?<!Scrum\s)(?<!Scrum )\b"
+            r"(Bachelor(?:'?s)?(?:\s+of\s+[A-Za-z\s]{2,30})?|Master(?:'?s)?(?:\s+of\s+[A-Za-z\s]{2,30})?"
+            r"|B\.?\s*Tech|M\.?\s*Tech|B\.?\s*E\.?(?=[\s,\(])|M\.?\s*E\.?(?=[\s,\(])"
+            r"|B\.?\s*Sc|M\.?\s*Sc|Ph\.?\s*D\.?|(?<!\w)MBA(?!\w)|BCA|MCA"
+            r")\b"
+        )
+        seen = set()
+        for m in degree_pattern.finditer(edu_section):
+            start = m.start()
+            # Get text from this position to end of line, trim at "|" delimiter
+            line_text = edu_section[start:start + 200].split("\n")[0]
+            snippet = line_text.split("|")[0].strip()  # trim at pipe (year separator)
+            # Also trim at certification keywords to avoid bleeding into cert section
+            for stop in ("Professional Certif", "Certif", "TOGAF", "ITIL"):
+                if stop.lower() in snippet.lower():
+                    snippet = snippet[:snippet.lower().find(stop.lower())].strip()
+            if len(snippet) < 3:
+                snippet = m.group().strip()
+            # Strip trailing punctuation like ")" or ","
+            snippet = snippet.rstrip(").,; ")
+            key = m.group().lower().strip()
+            if key not in seen and len(snippet) > 3:
+                seen.add(key)
+                # Try to extract year from the pipe-separated part
+                year_match = re.search(r"(\d{4}(?:\s*[-–]\s*\d{4})?)", line_text)
+                entries.append({
+                    "degree": snippet,
+                    "institution": None,
+                    "year": year_match.group(1) if year_match else None,
+                })
         return entries[:5]
 
     def extract_certifications(self, text: str) -> list:
@@ -325,21 +470,21 @@ class RuleBasedExtractor:
         return list(set(found))[:10]
 
     def infer_domain(self, text: str) -> list:
-        """Infer industry domain from text."""
+        """Infer industry domain from text using word-boundary matching."""
         domain_keywords = {
-            "FinTech": ["banking", "finance", "payment", "trading", "insurance", "fintech"],
-            "Healthcare": ["health", "medical", "clinical", "hospital", "pharma", "ehr"],
-            "E-commerce": ["ecommerce", "retail", "marketplace", "inventory", "cart"],
-            "SaaS": ["saas", "b2b", "subscription", "multi-tenant", "platform"],
-            "AI/ML": ["machine learning", "deep learning", "neural", "nlp", "llm", "model"],
-            "Cloud": ["cloud", "aws", "azure", "gcp", "infrastructure", "devops"],
-            "EdTech": ["education", "learning", "course", "student", "teaching"],
-            "Gaming": ["game", "unity", "unreal", "gaming", "player"],
+            "FinTech": [r"\bbanking\b", r"\bfinance\b", r"\bpayment\b", r"\btrading\b", r"\binsurance\b", r"\bfintech\b"],
+            "Healthcare": [r"\bhealth(?:care)?\b", r"\bmedical\b", r"\bclinical\b", r"\bhospital\b", r"\bpharma\b", r"\behr\b"],
+            "E-commerce": [r"\becommerce\b", r"\bretail\b", r"\bmarketplace\b", r"\binventory\b"],
+            "SaaS": [r"\bsaas\b", r"\bb2b\b", r"\bsubscription\b", r"\bmulti-tenant\b"],
+            "AI/ML": [r"\bmachine learning\b", r"\bdeep learning\b", r"\bneural network\b", r"\bnlp\b", r"\bllm\b"],
+            "Cloud/DevOps": [r"\bcloud\b", r"\baws\b", r"\bazure\b", r"\bgcp\b", r"\bdevops\b", r"\binfrastructure\b"],
+            "EdTech": [r"\bedtech\b", r"\be-learning\b", r"\bonline learning\b", r"\bcourseware\b"],
+            "Gaming": [r"\bgaming\b", r"\bvideo game\b", r"\bunity\b", r"\bunreal\b"],
         }
         text_lower = text.lower()
         found = []
-        for domain, keywords in domain_keywords.items():
-            if any(kw in text_lower for kw in keywords):
+        for domain, patterns in domain_keywords.items():
+            if any(re.search(p, text_lower) for p in patterns):
                 found.append(domain)
         return found[:5]
 

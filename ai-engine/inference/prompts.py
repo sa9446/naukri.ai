@@ -19,17 +19,15 @@ class PromptTemplates:
         Extracts all structured fields from raw CV text.
         Temperature: 0.1 for deterministic JSON.
         """
-        return f"""[INST] You are a precise CV parsing assistant. Extract structured data from the CV text below.
+        return f"""[INST] Extract structured data from this CV. Return ONLY valid JSON, no extra text.
 
-RULES:
-- Return ONLY valid JSON. No markdown, no explanation, no code fences.
-- Use null for missing fields, not empty strings.
-- Calculate totalExperienceYears by summing all work durations.
-- Extract ALL skills mentioned (technical and soft).
-- For domainExpertise, identify industries (e.g., FinTech, Healthcare, SaaS, E-commerce).
-- For traits, infer from language used (e.g., "led team" → leadership, "analyzed data" → analytical).
+IMPORTANT:
+- Extract EVERY job from the experience section (list all roles, most recent first).
+- The first job listed is the CURRENT or most recent role.
+- Use null for missing fields.
+- For totalExperienceYears, sum all work durations (use today = 2026-03 for "Present" roles).
 
-Return this exact JSON structure:
+JSON structure to return:
 {{
   "fullName": "string or null",
   "email": "string or null",
@@ -45,7 +43,7 @@ Return this exact JSON structure:
       "startDate": "YYYY-MM or null",
       "endDate": "YYYY-MM or Present",
       "durationYears": 0.0,
-      "description": "key achievements string"
+      "description": "key achievements"
     }}
   ],
   "education": [
@@ -58,17 +56,17 @@ Return this exact JSON structure:
   ],
   "certifications": ["cert1"],
   "languages": ["English"],
-  "domainExpertise": ["domain1", "domain2"],
+  "domainExpertise": ["domain1"],
   "behavioralFit": {{
-    "traits": ["trait1", "trait2"],
+    "traits": ["trait1"],
     "workStyle": "collaborative/independent/mixed",
     "teamPlayer": true,
-    "leadershipIndicators": ["specific evidence from CV"]
+    "leadershipIndicators": ["evidence from CV"]
   }}
 }}
 
 CV TEXT:
-{cv_text[:10000]}
+{cv_text[:5000]}
 [/INST]"""
 
     @staticmethod

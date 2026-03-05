@@ -117,6 +117,7 @@ class OllamaClient:
                         "options": {
                             "temperature": self.temperature,
                             "num_predict": self.max_tokens,
+                            "num_ctx": 4096,   # phi3:mini fits within 4K (8K causes OOM)
                             "top_p": 0.9,
                             "repeat_penalty": 1.1,
                         },
@@ -137,8 +138,9 @@ class OllamaClient:
                     raise RuntimeError(f"Ollama timed out after {self.max_retries} attempts")
 
             except httpx.HTTPStatusError as e:
-                if e.response.status_code == 404 and model != self.fallback_model:
-                    logger.warning(f"Model {active_model} not found, trying fallback")
+                # Switch to fallback on model-not-found (404) OR out-of-memory (500)
+                if active_model != self.fallback_model:
+                    logger.warning(f"Model {active_model} failed ({e.response.status_code}), trying fallback {self.fallback_model}")
                     active_model = self.fallback_model
                     self._active_model = self.fallback_model
                 else:

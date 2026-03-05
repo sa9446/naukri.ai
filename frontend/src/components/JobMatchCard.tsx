@@ -129,17 +129,17 @@ export default function JobMatchCard({
       {/* Matched skills */}
       {matchReasons?.skills?.matched?.length > 0 && (
         <div className="flex flex-wrap gap-1.5">
-          {matchReasons.skills.matched.map((s) => (
+          {matchReasons.skills.matched.map((s, i) => (
             <span
-              key={s}
+              key={`matched-${s}-${i}`}
               className="bg-green-50 text-green-700 border border-green-200 px-2 py-0.5 rounded-full text-xs font-medium"
             >
               {s}
             </span>
           ))}
-          {matchReasons.skills.missing?.map((s) => (
+          {matchReasons.skills.missing?.map((s, i) => (
             <span
-              key={s}
+              key={`missing-${s}-${i}`}
               className="bg-red-50 text-red-600 border border-red-200 px-2 py-0.5 rounded-full text-xs"
             >
               {s} (missing)

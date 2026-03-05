@@ -84,9 +84,9 @@ export default function CandidateCard({
 
       {/* Skills */}
       <div className="flex flex-wrap gap-1.5">
-        {candidate?.skills.slice(0, 8).map((s) => (
+        {[...new Set(candidate?.skills ?? [])].slice(0, 8).map((s, i) => (
           <span
-            key={s}
+            key={`skill-${s}-${i}`}
             className={clsx(
               'px-2 py-0.5 rounded-full text-xs font-medium border',
               matchReasons.skills.matched?.includes(s.toLowerCase())

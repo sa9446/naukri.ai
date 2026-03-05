@@ -75,8 +75,8 @@ export default function UploadCVPage() {
               <div>
                 <strong>Skills detected:</strong>
                 <div className="flex flex-wrap gap-1.5 mt-1">
-                  {result.parsedProfile.skills?.slice(0, 12).map((s) => (
-                    <span key={s} className="bg-primary-50 text-primary-700 border border-primary-200 px-2 py-0.5 rounded-full text-xs">
+                  {[...new Set(result.parsedProfile.skills ?? [])].slice(0, 12).map((s, i) => (
+                    <span key={`skill-${s}-${i}`} className="bg-primary-50 text-primary-700 border border-primary-200 px-2 py-0.5 rounded-full text-xs">
                       {s}
                     </span>
                   ))}
