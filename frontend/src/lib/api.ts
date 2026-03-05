@@ -114,10 +114,9 @@ interface CandidateFilters {
 }
 
 interface ScrapePayload {
-  platform: 'naukri' | 'linkedin';
   keyword: string;
   location?: string;
-  maxPages?: number;
+  platform?: 'linkedin' | 'remoteok';
 }
 
 interface ProfileUpdatePayload {

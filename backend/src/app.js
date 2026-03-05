@@ -16,10 +16,12 @@ const morgan = require('morgan');
 const rateLimit = require('express-rate-limit');
 const logger = require('./config/logger');
 
+const cron = require('node-cron');
 const authRoutes = require('./routes/auth.routes');
 const jobSeekerRoutes = require('./routes/jobSeeker.routes');
 const recruiterRoutes = require('./routes/recruiter.routes');
 const jobRoutes = require('./routes/job.routes');
+const jobScraper = require('./services/jobScraper.service');
 
 const app = express();
 
@@ -77,6 +79,32 @@ app.use((err, req, res, next) => {
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
   logger.info(`Server running on port ${PORT} in ${process.env.NODE_ENV || 'development'} mode`);
+
+  // Seed jobs on first startup if DB is empty
+  jobScraper.seedIfEmpty().catch((err) =>
+    logger.error('Startup job seed failed:', err)
+  );
+
+  // Refresh jobs every 6 hours — rotate through keyword batches
+  const CRON_KEYWORDS = [
+    ['React Developer', 'Node.js Developer', 'Python Developer'],
+    ['Full Stack Developer', 'Data Engineer', 'DevOps Engineer'],
+    ['Machine Learning Engineer', 'Backend Developer', 'Frontend Developer'],
+  ];
+  let cronBatch = 0;
+  cron.schedule('0 */6 * * *', async () => {
+    const batch = CRON_KEYWORDS[cronBatch % CRON_KEYWORDS.length];
+    cronBatch++;
+    logger.info(`[Cron] Refreshing jobs — batch: ${batch.join(', ')}`);
+    for (const kw of batch) {
+      try {
+        await jobScraper.scrapeAll(kw, 'India');
+      } catch (err) {
+        logger.error(`[Cron] scrapeAll failed for "${kw}":`, err.message);
+      }
+    }
+  });
+  logger.info('[Cron] Job refresh scheduled every 6 hours');
 });
 
 module.exports = app;

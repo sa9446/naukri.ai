@@ -126,26 +126,24 @@ const getSkillDistribution = async (req, res) => {
  * Trigger job scraping from Naukri or LinkedIn.
  */
 const triggerJobScrape = async (req, res) => {
-  const { platform, keyword, location, maxPages = 2 } = req.body;
+  const { keyword = 'Software Engineer', location = 'India', platform } = req.body;
 
-  if (!platform || !keyword) {
-    return res.status(400).json({ error: 'platform and keyword are required' });
-  }
+  // Respond immediately — scraping runs in background
+  res.json({ message: `Scraping "${keyword}" in background…`, keyword, location });
 
   try {
     let count = 0;
-    if (platform === 'naukri') {
-      count = await jobScraper.scrapeNaukri(keyword, location, maxPages);
-    } else if (platform === 'linkedin') {
-      count = await jobScraper.scrapeLinkedIn(keyword, location, maxPages);
+    if (platform === 'linkedin') {
+      count = await jobScraper.scrapeLinkedIn(keyword, location, 2);
+    } else if (platform === 'remoteok') {
+      count = await jobScraper.scrapeRemoteOK(keyword);
     } else {
-      return res.status(400).json({ error: 'Invalid platform. Use "naukri" or "linkedin"' });
+      // Default: both sources
+      count = await jobScraper.scrapeAll(keyword, location);
     }
-
-    res.json({ message: `Scraped and ingested ${count} jobs from ${platform}`, count });
+    logger.info(`[Scrape] Completed "${keyword}": ${count} jobs ingested`);
   } catch (err) {
     logger.error('Scrape trigger error:', err);
-    res.status(500).json({ error: err.message });
   }
 };
 

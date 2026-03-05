@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import Navbar from '@/components/Navbar';
 import { recruiterAPI } from '@/lib/api';
-import { Briefcase, Users, TrendingUp, ChevronRight, Plus } from 'lucide-react';
+import { Briefcase, Users, TrendingUp, ChevronRight, Plus, Search, Loader2, CheckCircle } from 'lucide-react';
 
 interface DashboardStats {
   totalJobs: number;
@@ -23,6 +23,9 @@ interface DashboardStats {
 export default function RecruiterDashboard() {
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [loading, setLoading] = useState(true);
+  const [scrapeKeyword, setScrapeKeyword] = useState('');
+  const [scraping, setScraping] = useState(false);
+  const [scrapeMsg, setScrapeMsg] = useState('');
 
   useEffect(() => {
     recruiterAPI
@@ -31,6 +34,22 @@ export default function RecruiterDashboard() {
       .catch(console.error)
       .finally(() => setLoading(false));
   }, []);
+
+  const handleScrape = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!scrapeKeyword.trim()) return;
+    setScraping(true);
+    setScrapeMsg('');
+    try {
+      const res = await recruiterAPI.triggerScrape({ keyword: scrapeKeyword.trim(), location: 'India' });
+      setScrapeMsg(res.data.message || 'Scraping started in background…');
+      setScrapeKeyword('');
+    } catch {
+      setScrapeMsg('Scrape request failed.');
+    } finally {
+      setScraping(false);
+    }
+  };
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -78,6 +97,39 @@ export default function RecruiterDashboard() {
                   </div>
                 </div>
               ))}
+            </div>
+
+            {/* Scrape Jobs */}
+            <div className="bg-white rounded-2xl border p-5">
+              <h2 className="text-base font-semibold text-gray-800 mb-1">Scrape Live Jobs</h2>
+              <p className="text-xs text-gray-400 mb-4">
+                Pull real job listings from LinkedIn & RemoteOK into the platform.
+                Runs in background — results appear in Browse Jobs within a minute.
+              </p>
+              <form onSubmit={handleScrape} className="flex gap-3">
+                <div className="flex-1 relative">
+                  <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                  <input
+                    value={scrapeKeyword}
+                    onChange={(e) => setScrapeKeyword(e.target.value)}
+                    placeholder="e.g. React Developer, Data Engineer, DevOps"
+                    className="w-full pl-9 pr-4 py-2 border rounded-xl text-sm focus:ring-2 focus:ring-primary-500 focus:outline-none"
+                  />
+                </div>
+                <button
+                  type="submit"
+                  disabled={scraping || !scrapeKeyword.trim()}
+                  className="flex items-center gap-2 bg-primary-600 text-white px-4 py-2 rounded-xl text-sm font-medium hover:bg-primary-700 disabled:opacity-60 transition"
+                >
+                  {scraping ? <Loader2 size={14} className="animate-spin" /> : <Search size={14} />}
+                  {scraping ? 'Starting…' : 'Scrape'}
+                </button>
+              </form>
+              {scrapeMsg && (
+                <p className="flex items-center gap-1.5 text-sm text-green-600 mt-3">
+                  <CheckCircle size={14} /> {scrapeMsg}
+                </p>
+              )}
             </div>
 
             {/* Jobs Overview */}
