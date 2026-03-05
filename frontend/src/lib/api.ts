@@ -43,6 +43,7 @@ export const jobSeekerAPI = {
       headers: { 'Content-Type': 'multipart/form-data' },
     }),
   getMyCVs: () => api.get('/job-seeker/cv'),
+  deleteCV: (cvId: string) => api.delete(`/job-seeker/cv/${cvId}`),
   getMatches: (cvId: string) => api.get(`/job-seeker/cv/${cvId}/matches`),
   triggerMatching: (cvId: string) => api.post(`/job-seeker/cv/${cvId}/match`),
 };
@@ -68,6 +69,11 @@ export const recruiterAPI = {
 export const jobsAPI = {
   list: (params?: JobQueryParams) => api.get('/jobs', { params }),
   get: (id: string) => api.get(`/jobs/${id}`),
+};
+
+// ─── Profile ──────────────────────────────────────────────────────────────────
+export const profileAPI = {
+  update: (data: ProfileUpdatePayload) => api.put('/auth/profile', data),
 };
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -112,6 +118,15 @@ interface ScrapePayload {
   keyword: string;
   location?: string;
   maxPages?: number;
+}
+
+interface ProfileUpdatePayload {
+  firstName?: string;
+  lastName?: string;
+  phone?: string;
+  location?: string;
+  companyName?: string;
+  industry?: string;
 }
 
 interface JobQueryParams {

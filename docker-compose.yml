@@ -1,19 +1,70 @@
 version: '3.9'
 
 services:
+  # ── PostgreSQL ─────────────────────────────────────────────────────────────
   postgres:
     image: postgres:16-alpine
     container_name: naukri_postgres
     restart: unless-stopped
     environment:
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: password
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
       POSTGRES_DB: naukri_cv_db
     ports:
       - '5432:5432'
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres']
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
+  # ── Ollama (local LLM server) ─────────────────────────────────────────────
+  # NOTE: After first start, pull the model once:
+  #   docker exec naukri_ollama ollama pull mistral:7b-instruct-v0.3-q4_K_M
+  ollama:
+    image: ollama/ollama:latest
+    container_name: naukri_ollama
+    restart: unless-stopped
+    ports:
+      - '11434:11434'
+    volumes:
+      - ollama_models:/root/.ollama
+    healthcheck:
+      test: ['CMD-SHELL', 'curl -sf http://localhost:11434/api/version || exit 1']
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  # ── AI Engine (FastAPI + rule extractor + embeddings) ─────────────────────
+  ai-engine:
+    build:
+      context: ./ai-engine
+      dockerfile: Dockerfile
+    container_name: naukri_ai_engine
+    restart: unless-stopped
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      OLLAMA_BASE_URL: http://ollama:11434
+      INTERNAL_API_KEY: ${INTERNAL_API_KEY:-internal-service-key-change-in-production}
+      AI_ENGINE_HOST: 0.0.0.0
+      AI_ENGINE_PORT: 8000
+    ports:
+      - '8000:8000'
+    volumes:
+      - ./ai-engine:/app
+    healthcheck:
+      test: ['CMD-SHELL', 'curl -sf http://localhost:8000/health || exit 1']
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # ── Backend (Node.js / Express / Prisma) ─────────────────────────────────
   backend:
     build:
       context: ./backend
@@ -21,18 +72,34 @@ services:
     container_name: naukri_backend
     restart: unless-stopped
     depends_on:
-      - postgres
-    env_file:
-      - ./backend/.env
+      postgres:
+        condition: service_healthy
+      ai-engine:
+        condition: service_healthy
     environment:
-      DATABASE_URL: postgresql://postgres:password@postgres:5432/naukri_cv_db
+      DATABASE_URL: postgresql://postgres:${POSTGRES_PASSWORD:-password}@postgres:5432/naukri_cv_db
+      AI_ENGINE_URL: http://ai-engine:8000
+      INTERNAL_API_KEY: ${INTERNAL_API_KEY:-internal-service-key-change-in-production}
+      FRONTEND_URL: http://localhost:3000
+      NODE_ENV: production
+      JWT_SECRET: ${JWT_SECRET:-change-this-secret-in-production}
+      JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-7d}
+      PORT: 5000
+      UPLOAD_DIR: ./uploads
+      MAX_FILE_SIZE_MB: ${MAX_FILE_SIZE_MB:-10}
+      MIN_MATCH_SCORE: ${MIN_MATCH_SCORE:-0.80}
     ports:
       - '5000:5000'
     volumes:
-      - ./backend:/app
-      - /app/node_modules
       - uploads:/app/uploads
+    healthcheck:
+      test: ['CMD-SHELL', 'curl -sf http://localhost:5000/health || exit 1']
+      interval: 20s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
 
+  # ── Frontend (Next.js) ───────────────────────────────────────────────────
   frontend:
     build:
       context: ./frontend
@@ -40,12 +107,20 @@ services:
     container_name: naukri_frontend
     restart: unless-stopped
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     environment:
-      NEXT_PUBLIC_API_URL: http://localhost:5000/api
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:5000/api}
     ports:
       - '3000:3000'
+    healthcheck:
+      test: ['CMD-SHELL', 'curl -sf http://localhost:3000 || exit 1']
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
 
 volumes:
   postgres_data:
   uploads:
+  ollama_models:

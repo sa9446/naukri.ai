@@ -7,6 +7,7 @@ const {
   getJobMatches,
   triggerMatching,
 } = require('../controllers/jobSeeker.controller');
+const { deleteCV } = require('../controllers/profile.controller');
 
 // All routes require JOB_SEEKER role
 router.use(authenticate, requireRole('JOB_SEEKER'));
@@ -22,5 +23,8 @@ router.get('/cv/:cvId/matches', getJobMatches);
 
 // POST /api/job-seeker/cv/:cvId/match
 router.post('/cv/:cvId/match', triggerMatching);
+
+// DELETE /api/job-seeker/cv/:cvId
+router.delete('/cv/:cvId', deleteCV);
 
 module.exports = router;

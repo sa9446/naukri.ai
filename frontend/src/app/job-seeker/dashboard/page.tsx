@@ -4,7 +4,8 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import Navbar from '@/components/Navbar';
 import { jobSeekerAPI } from '@/lib/api';
-import { FileText, TrendingUp, Upload, ChevronRight } from 'lucide-react';
+import clsx from 'clsx';
+import { FileText, TrendingUp, Upload, ChevronRight, Trash2 } from 'lucide-react';
 
 interface CV {
   id: string;
@@ -22,14 +23,30 @@ interface CV {
 export default function JobSeekerDashboard() {
   const [cvs, setCvs] = useState<CV[]>([]);
   const [loading, setLoading] = useState(true);
+  const [deleting, setDeleting] = useState<string | null>(null);
 
-  useEffect(() => {
+  const loadCVs = () => {
     jobSeekerAPI
       .getMyCVs()
       .then((res) => setCvs(res.data))
       .catch(console.error)
       .finally(() => setLoading(false));
-  }, []);
+  };
+
+  useEffect(() => { loadCVs(); }, []);
+
+  const handleDelete = async (cvId: string) => {
+    if (!confirm('Delete this CV and all its matches?')) return;
+    setDeleting(cvId);
+    try {
+      await jobSeekerAPI.deleteCV(cvId);
+      setCvs((prev) => prev.filter((c) => c.id !== cvId));
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setDeleting(null);
+    }
+  };
 
   const totalMatches = cvs.reduce((sum, cv) => sum + (cv._count?.jobMatches || 0), 0);
 
@@ -97,12 +114,25 @@ export default function JobSeekerDashboard() {
                       </p>
                     </div>
                   </div>
-                  <Link
-                    href={`/job-seeker/job-matches?cvId=${cv.id}`}
-                    className="text-sm text-primary-600 font-medium hover:underline flex items-center gap-1"
-                  >
-                    {cv._count.jobMatches} matches <ChevronRight size={14} />
-                  </Link>
+                  <div className="flex items-center gap-3">
+                    <Link
+                      href={`/job-seeker/job-matches?cvId=${cv.id}`}
+                      className="text-sm text-primary-600 font-medium hover:underline flex items-center gap-1"
+                    >
+                      {cv._count.jobMatches} matches <ChevronRight size={14} />
+                    </Link>
+                    <button
+                      onClick={() => handleDelete(cv.id)}
+                      disabled={deleting === cv.id}
+                      className={clsx(
+                        'p-1.5 rounded-lg text-gray-400 hover:text-red-500 hover:bg-red-50 transition',
+                        deleting === cv.id && 'opacity-40 cursor-not-allowed'
+                      )}
+                      title="Delete CV"
+                    >
+                      <Trash2 size={15} />
+                    </button>
+                  </div>
                 </div>
               ))}
             </div>

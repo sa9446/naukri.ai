@@ -23,7 +23,8 @@ export default function Navbar() {
       : [
           { href: '/job-seeker/dashboard', label: 'Dashboard' },
           { href: '/job-seeker/upload-cv', label: 'Upload CV' },
-          { href: '/job-seeker/job-matches', label: 'Job Matches' },
+          { href: '/job-seeker/jobs', label: 'Browse Jobs' },
+          { href: '/job-seeker/job-matches', label: 'My Matches' },
         ];
 
   return (
@@ -41,6 +42,12 @@ export default function Navbar() {
             {l.label}
           </Link>
         ))}
+        <Link
+          href="/settings"
+          className="text-sm text-gray-600 hover:text-primary-600 font-medium transition"
+        >
+          Settings
+        </Link>
         <span className="text-xs bg-primary-100 text-primary-700 px-2 py-1 rounded-full font-medium">
           {user?.role === 'RECRUITER' ? 'Recruiter' : 'Job Seeker'}
         </span>

@@ -1,4 +1,14 @@
 require('dotenv').config();
+
+// ─── Startup Validation ────────────────────────────────────────────────────
+const REQUIRED_ENV = ['DATABASE_URL', 'JWT_SECRET'];
+const missing = REQUIRED_ENV.filter((k) => !process.env[k]);
+if (missing.length) {
+  console.error(`[FATAL] Missing required env vars: ${missing.join(', ')}`);
+  console.error('Copy backend/.env.example to backend/.env and fill in values.');
+  process.exit(1);
+}
+
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
@@ -10,6 +20,7 @@ const authRoutes = require('./routes/auth.routes');
 const jobSeekerRoutes = require('./routes/jobSeeker.routes');
 const recruiterRoutes = require('./routes/recruiter.routes');
 const jobRoutes = require('./routes/job.routes');
+const { deleteCV } = require('./controllers/profile.controller');
 
 const app = express();
 
