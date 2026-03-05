@@ -92,8 +92,14 @@ const me = async (req, res) => {
   try {
     const user = await prisma.user.findUnique({
       where: { id: req.user.id },
-      include: { jobSeekerProfile: true, recruiterProfile: true },
-      omit: { password: true },
+      select: {
+        id: true,
+        email: true,
+        role: true,
+        createdAt: true,
+        jobSeekerProfile: true,
+        recruiterProfile: true,
+      },
     });
     res.json(user);
   } catch (err) {
