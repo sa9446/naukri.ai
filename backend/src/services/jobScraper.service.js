@@ -15,6 +15,16 @@ const cheerio = require('cheerio');
 const prisma = require('../config/database');
 const logger = require('../config/logger');
 
+// Simple concurrency limiter (avoids ESM pLimit issue)
+const concurrentMap = async (arr, concurrency, fn) => {
+  const results = [];
+  for (let i = 0; i < arr.length; i += concurrency) {
+    const batch = arr.slice(i, i + concurrency);
+    results.push(...await Promise.all(batch.map(fn)));
+  }
+  return results;
+};
+
 const DELAY_MS = parseInt(process.env.SCRAPER_DELAY_MS || '1500', 10);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -45,32 +55,56 @@ class JobScraperService {
    */
   async scrapeLinkedIn(keyword, location = 'India', maxPages = 2) {
     logger.info(`[LinkedIn] Scraping "${keyword}" in "${location}"`);
-    let ingested = 0;
+    const allJobs = [];
 
+    // Step 1: collect all cards from search pages
     for (let page = 0; page < maxPages; page++) {
       const start = page * 25;
       try {
-        const url = 'https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search';
-        const resp = await axios.get(url, {
-          params: { keywords: keyword, location, start },
-          headers: LINKEDIN_HEADERS,
-          timeout: 15000,
-        });
-
-        const jobs = this._parseLinkedInHTML(resp.data, keyword);
-        logger.debug(`[LinkedIn] Page ${page + 1}: parsed ${jobs.length} jobs`);
-
-        for (const job of jobs) {
-          await this._upsertJob(job, 'LINKEDIN');
-          ingested++;
-        }
-
-        if (jobs.length < 25) break; // last page
+        const resp = await axios.get(
+          'https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search',
+          {
+            params: { keywords: keyword, location, start },
+            headers: LINKEDIN_HEADERS,
+            timeout: 15000,
+          }
+        );
+        const jobs = this._parseLinkedInCards(resp.data, keyword);
+        logger.debug(`[LinkedIn] Page ${page + 1}: ${jobs.length} cards`);
+        allJobs.push(...jobs);
+        if (jobs.length < 25) break;
         await sleep(DELAY_MS);
       } catch (err) {
-        logger.warn(`[LinkedIn] Error page ${page + 1}: ${err.response?.status || err.message}`);
+        logger.warn(`[LinkedIn] Search page ${page + 1} error: ${err.response?.status || err.message}`);
         break;
       }
+    }
+
+    if (allJobs.length === 0) return 0;
+
+    // Step 2: fetch full description for each job (3 at a time)
+    await concurrentMap(allJobs, 3, async (job) => {
+      if (!job.sourceUrl) return;
+      try {
+        const resp = await axios.get(job.sourceUrl, {
+          headers: LINKEDIN_HEADERS,
+          timeout: 12000,
+        });
+        const enriched = this._parseLinkedInDetail(resp.data);
+        if (enriched.description) job.description = enriched.description;
+        if (enriched.skills.length > 0) job.requiredSkills = enriched.skills;
+        if (enriched.jobType) job.jobType = enriched.jobType;
+      } catch {
+        // keep card-level data if detail fetch fails
+      }
+      await sleep(800);
+    });
+
+    // Step 3: upsert all
+    let ingested = 0;
+    for (const job of allJobs) {
+      await this._upsertJob(job, 'LINKEDIN');
+      ingested++;
     }
 
     logger.info(`[LinkedIn] Done — ${ingested} jobs ingested`);
@@ -102,7 +136,7 @@ class JobScraperService {
       logger.debug(`[RemoteOK] Received ${jobs.length} jobs`);
 
       for (const job of jobs) {
-        await this._upsertJob(this._normalizeRemoteOK(job), 'MANUAL');
+        await this._upsertJob(this._normalizeRemoteOK(job), 'INDEED'); // reuse INDEED enum for RemoteOK
         ingested++;
       }
     } catch (err) {
@@ -169,7 +203,7 @@ class JobScraperService {
 
   // ─── Parsers ─────────────────────────────────────────────────────────────
 
-  _parseLinkedInHTML(html, keyword) {
+  _parseLinkedInCards(html, keyword) {
     const $ = cheerio.load(html);
     const jobs = [];
 
@@ -205,8 +239,32 @@ class JobScraperService {
     return jobs;
   }
 
+  _parseLinkedInDetail(html) {
+    const $ = cheerio.load(html);
+
+    // Full job description text
+    const descEl = $('.show-more-less-html__markup, .description__text, [class*="description"]').first();
+    const description = descEl.text().replace(/\s+/g, ' ').trim().slice(0, 2000) || '';
+
+    // Job criteria (seniority, employment type, industry, function)
+    const criteriaItems = {};
+    $('.description__job-criteria-item').each((_, el) => {
+      const label = $(el).find('.description__job-criteria-subheader').text().trim().toLowerCase();
+      const value = $(el).find('.description__job-criteria-text').text().trim();
+      criteriaItems[label] = value;
+    });
+
+    const jobType = criteriaItems['employment type']
+      ? this._normalizeJobType(criteriaItems['employment type'])
+      : null;
+
+    // Extract skills from the full description text
+    const skills = description ? this._extractSkillsFromText(description) : [];
+
+    return { description, skills, jobType, criteriaItems };
+  }
+
   _normalizeRemoteOK(job) {
-    const tags = (job.tags || []).map((t) => this._capitalizeSkill(t));
     const salary = job.salary_min && job.salary_max
       ? `$${Math.round(job.salary_min / 1000)}k–$${Math.round(job.salary_max / 1000)}k`
       : job.salary || null;
@@ -216,6 +274,10 @@ class JobScraperService {
       ? cheerio.load(job.description).text().replace(/\s+/g, ' ').trim().slice(0, 500)
       : `${job.position} at ${job.company}`;
 
+    // Extract skills from description + title + tags — filtered through known tech skills list
+    const skillText = `${job.position} ${desc} ${(job.tags || []).join(' ')}`;
+    const skills = this._extractSkillsFromText(skillText).slice(0, 12);
+
     return {
       title: job.position,
       company: job.company,
@@ -223,7 +285,7 @@ class JobScraperService {
       location: job.location || 'Remote',
       sourceId: String(job.id || job.slug),
       sourceUrl: job.apply_url || job.url || null,
-      requiredSkills: tags.slice(0, 12),
+      requiredSkills: skills,
       experienceRange: this._guessExperienceFromTitle(job.position),
       domain: this._guessDomainFromTitle(job.position),
       salary,
@@ -274,9 +336,11 @@ class JobScraperService {
       'Data Science', 'Spark', 'Kafka', 'Airflow', 'dbt', 'SQL', 'Tableau', 'Power BI',
       'React Native', 'Flutter', 'iOS', 'Android',
       'Microservices', 'System Design', 'DevOps', 'Agile', 'Scrum', 'TDD',
+      'Linux', 'Git', 'Bash', 'Shell', 'Nginx', 'RabbitMQ', 'Celery',
+      'Pandas', 'NumPy', 'Jupyter', 'OpenCV', 'LangChain', 'LLM',
     ];
     const lower = text.toLowerCase();
-    return SKILLS.filter((s) => lower.includes(s.toLowerCase()));
+    return [...new Set(SKILLS.filter((s) => lower.includes(s.toLowerCase())))];
   }
 
   _capitalizeSkill(tag) {
@@ -299,6 +363,16 @@ class JobScraperService {
     if (t.includes('staff') || t.includes('architect') || t.includes('vp') || t.includes('director')) return { min: 8, max: 20 };
     if (t.includes('manager')) return { min: 4, max: 10 };
     return { min: 2, max: 6 }; // mid-level default
+  }
+
+  _normalizeJobType(text) {
+    const t = text.toLowerCase();
+    if (t.includes('full')) return 'FULL_TIME';
+    if (t.includes('part')) return 'PART_TIME';
+    if (t.includes('contract')) return 'CONTRACT';
+    if (t.includes('intern')) return 'INTERNSHIP';
+    if (t.includes('remote')) return 'REMOTE';
+    return null;
   }
 
   _guessDomainFromTitle(title) {
