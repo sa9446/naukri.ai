@@ -15,8 +15,8 @@ node_modules/
 .nuxt/
 dist/
 
-# Prisma
-backend/prisma/migrations/
+# Prisma — migrations ARE committed (required for deployment)
+# backend/prisma/migrations/
 
 # Uploads / temp
 uploads/
