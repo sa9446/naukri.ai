@@ -20,7 +20,6 @@ const authRoutes = require('./routes/auth.routes');
 const jobSeekerRoutes = require('./routes/jobSeeker.routes');
 const recruiterRoutes = require('./routes/recruiter.routes');
 const jobRoutes = require('./routes/job.routes');
-const { deleteCV } = require('./controllers/profile.controller');
 
 const app = express();
 
