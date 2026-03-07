@@ -2,6 +2,7 @@ const prisma = require('../config/database');
 const cvExtraction = require('../services/cvExtraction.service');
 const aiInference = require('../services/aiInference.service');
 const jobMatching = require('../services/jobMatching.service');
+const jobScraper = require('../services/jobScraper.service');
 const logger = require('../config/logger');
 
 /**
@@ -35,8 +36,8 @@ const uploadCV = async (req, res) => {
       },
     });
 
-    // Step 3: AI parsing via external API call
-    const parsed = await aiInference.parseCVToStructured(rawText);
+    // Step 3: Fast rule-based parse (~1-2s) — return to user immediately
+    const parsed = await aiInference.parseCVToStructured(rawText, 'rules');
     const embedding = await aiInference.generateEmbedding(rawText);
 
     await prisma.candidateAnalysis.create({
@@ -63,11 +64,7 @@ const uploadCV = async (req, res) => {
     // Cleanup uploaded file
     cvExtraction.cleanupFile(req.file.path);
 
-    // Step 4: Run job matching asynchronously (don't block response)
-    jobMatching.matchCVToJobs(cv.id).catch((err) =>
-      logger.error(`Background matching failed for CV ${cv.id}:`, err)
-    );
-
+    // Return to user immediately
     res.status(201).json({
       message: 'CV uploaded and processing started',
       cvId: cv.id,
@@ -78,6 +75,48 @@ const uploadCV = async (req, res) => {
         domainExpertise: parsed.domainExpertise,
         highlights: parsed.highlights || [],
       },
+    });
+
+    // Step 4: LLM enrichment + job matching in background (non-blocking)
+    setImmediate(async () => {
+      try {
+        const rich = await aiInference.parseCVToStructured(rawText, 'hybrid');
+        await prisma.candidateAnalysis.update({
+          where: { cvId: cv.id },
+          data: {
+            fullName: rich.fullName || parsed.fullName,
+            email: rich.email || parsed.email,
+            phone: rich.phone || parsed.phone,
+            location: rich.location || parsed.location,
+            summary: rich.summary || parsed.summary,
+            skills: rich.skills?.length ? rich.skills : parsed.skills,
+            experience: rich.totalExperienceYears || parsed.totalExperienceYears || 0,
+            experienceJson: rich.experience?.length ? rich.experience : parsed.experience,
+            education: rich.education?.length ? rich.education : parsed.education,
+            certifications: rich.certifications || parsed.certifications,
+            languages: rich.languages || parsed.languages,
+            domainExpertise: rich.domainExpertise?.length ? rich.domainExpertise : parsed.domainExpertise,
+            highlights: rich.highlights?.length ? rich.highlights : parsed.highlights,
+            behavioralFit: rich.behavioralFit || parsed.behavioralFit,
+          },
+        });
+        logger.info(`CV ${cv.id} LLM enrichment complete`);
+      } catch (err) {
+        logger.warn(`CV ${cv.id} LLM enrichment failed (rules data kept): ${err.message}`);
+      }
+      // Scrape jobs based on candidate's last job title, then run matching
+      const finalAnalysis = await prisma.candidateAnalysis.findUnique({ where: { cvId: cv.id } });
+      const lastRole = finalAnalysis?.experienceJson?.[0]?.role;
+      const location = finalAnalysis?.location || 'India';
+      if (lastRole) {
+        logger.info(`CV ${cv.id}: scraping jobs for last role "${lastRole}"`);
+        await jobScraper.scrapeFromSearch(lastRole, location).catch((err) =>
+          logger.warn(`CV ${cv.id} job scrape failed: ${err.message}`)
+        );
+      }
+      jobMatching.matchCVToJobs(cv.id).catch((err) =>
+        logger.error(`Background matching failed for CV ${cv.id}:`, err)
+      );
     });
   } catch (err) {
     logger.error('CV upload error:', err);
@@ -148,6 +187,10 @@ const getJobMatches = async (req, res) => {
             salary: true,
             jobType: true,
             requiredSkills: true,
+            domain: true,
+            description: true,
+            experienceMin: true,
+            experienceMax: true,
             source: true,
             sourceUrl: true,
             postedAt: true,
@@ -200,8 +243,65 @@ const triggerMatching = async (req, res) => {
     res.json({ message: `Matching complete. Found ${matches.length} matches.`, count: matches.length });
   } catch (err) {
     logger.error('Trigger matching error:', err);
-    res.status(500).json({ error: err.message });
+    const status = err.message.includes('not found') ? 404 : 500;
+    res.status(status).json({ error: err.message });
   }
 };
 
-module.exports = { uploadCV, getMyCVs, getJobMatches, triggerMatching };
+/**
+ * Update the parsed CV analysis (user corrections after AI parsing).
+ * Allows editing: name, skills, experience, summary, location, education, etc.
+ * Re-runs job matching after save.
+ */
+const updateCVAnalysis = async (req, res) => {
+  const { cvId } = req.params;
+  const {
+    fullName, email, phone, location, summary,
+    skills, experience, experienceJson, education,
+    certifications, languages, domainExpertise,
+  } = req.body;
+
+  try {
+    const profile = await prisma.jobSeekerProfile.findUnique({
+      where: { userId: req.user.id },
+    });
+    const cv = await prisma.cV.findFirst({
+      where: { id: cvId, jobSeekerProfileId: profile.id },
+      include: { candidateAnalysis: true },
+    });
+    if (!cv) return res.status(404).json({ error: 'CV not found' });
+    if (!cv.candidateAnalysis) return res.status(404).json({ error: 'CV analysis not found' });
+
+    // Build update payload — only include fields that were sent
+    const updateData = {};
+    if (fullName !== undefined) updateData.fullName = fullName;
+    if (email !== undefined) updateData.email = email;
+    if (phone !== undefined) updateData.phone = phone;
+    if (location !== undefined) updateData.location = location;
+    if (summary !== undefined) updateData.summary = summary;
+    if (skills !== undefined) updateData.skills = Array.isArray(skills) ? skills : [skills];
+    if (experience !== undefined) updateData.experience = parseFloat(experience) || 0;
+    if (experienceJson !== undefined) updateData.experienceJson = experienceJson;
+    if (education !== undefined) updateData.education = education;
+    if (certifications !== undefined) updateData.certifications = Array.isArray(certifications) ? certifications : [];
+    if (languages !== undefined) updateData.languages = Array.isArray(languages) ? languages : [];
+    if (domainExpertise !== undefined) updateData.domainExpertise = Array.isArray(domainExpertise) ? domainExpertise : [];
+
+    const updated = await prisma.candidateAnalysis.update({
+      where: { cvId },
+      data: updateData,
+    });
+
+    // Re-run job matching in background with updated profile
+    jobMatching.matchCVToJobs(cvId).catch((err) =>
+      logger.error(`Re-matching after edit failed for CV ${cvId}:`, err)
+    );
+
+    res.json({ message: 'CV profile updated. Job matching re-running in background.', analysis: updated });
+  } catch (err) {
+    logger.error('Update CV analysis error:', err);
+    res.status(500).json({ error: err.message || 'Update failed' });
+  }
+};
+
+module.exports = { uploadCV, getMyCVs, getJobMatches, triggerMatching, updateCVAnalysis };

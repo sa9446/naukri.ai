@@ -17,8 +17,13 @@ enum Role {
 enum JobSource {
   LINKEDIN
   NAUKRI
-  MANUAL
+  NAUKRIGULF
   INDEED
+  HALIAN
+  DISCOVERED
+  ADNOC
+  MANUAL
+  SCRAPED
 }
 
 enum ApplicationStatus {

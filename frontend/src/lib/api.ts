@@ -46,6 +46,8 @@ export const jobSeekerAPI = {
   deleteCV: (cvId: string) => api.delete(`/job-seeker/cv/${cvId}`),
   getMatches: (cvId: string) => api.get(`/job-seeker/cv/${cvId}/matches`),
   triggerMatching: (cvId: string) => api.post(`/job-seeker/cv/${cvId}/match`),
+  updateCVAnalysis: (cvId: string, data: Record<string, unknown>) =>
+    api.put(`/job-seeker/cv/${cvId}/analysis`, data),
 };
 
 // ─── Recruiter ────────────────────────────────────────────────────────────────
@@ -69,6 +71,8 @@ export const recruiterAPI = {
 export const jobsAPI = {
   list: (params?: JobQueryParams) => api.get('/jobs', { params }),
   get: (id: string) => api.get(`/jobs/${id}`),
+  search: (keyword: string, location?: string) =>
+    api.post('/jobs/search', { keyword, location }),
 };
 
 // ─── Profile ──────────────────────────────────────────────────────────────────

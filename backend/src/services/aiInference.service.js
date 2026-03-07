@@ -44,15 +44,12 @@ class AIInferenceService {
    * @param {string} rawText - Raw text extracted from CV file
    * @returns {Promise<Object>} - Structured CV data
    */
-  async parseCVToStructured(rawText) {
-    logger.debug('Sending CV to local AI engine for parsing...');
+  async parseCVToStructured(rawText, mode = 'hybrid') {
+    logger.debug(`Sending CV to local AI engine for parsing [mode=${mode}]...`);
 
     try {
       const response = await withRetry(() =>
-        aiEngine.post('/parse-cv', {
-          rawText,
-          mode: 'hybrid', // LLM + rule-based validation
-        })
+        aiEngine.post('/parse-cv', { rawText, mode })
       );
 
       const { data } = response.data;

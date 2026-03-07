@@ -9,6 +9,7 @@ import re
 from datetime import datetime
 from typing import Optional
 from loguru import logger
+from nlp import resume_extraction_bridge as _bridge
 
 
 # ─── Comprehensive Skill Taxonomy ─────────────────────────────────────────────
@@ -101,9 +102,15 @@ class RuleBasedExtractor:
     """
 
     def extract_all(self, text: str) -> dict:
-        """Run full rule-based extraction pipeline."""
+        """
+        Run full extraction pipeline.
+        If file_path is provided and ResumeDataExtraction bridge is available,
+        uses NLP-based extraction (spacy + NLTK) and merges with regex results.
+        """
         logger.debug("Running rule-based extraction...")
-        return {
+
+        # Base regex extraction
+        base = {
             "fullName": self.extract_name(text),
             "email": self.extract_email(text),
             "phone": self.extract_phone(text),
@@ -122,6 +129,42 @@ class RuleBasedExtractor:
             "traitScores": self.score_traits(text),
             "highlights": self.extract_highlights(text),
         }
+
+        # Enrich with NLP bridge (spacy + skills.csv)
+        if _bridge.is_available():
+            try:
+                nlp_data = _bridge.extract_from_text(text)
+                if nlp_data:
+                    logger.debug("Enriching with ResumeDataExtraction NLP results")
+                    # Prefer NLP results for fields where it does better
+                    if nlp_data.get("fullName"):
+                        base["fullName"] = nlp_data["fullName"]
+                    if nlp_data.get("email"):
+                        base["email"] = nlp_data["email"]
+                    if nlp_data.get("phone"):
+                        base["phone"] = nlp_data["phone"]
+                    if nlp_data.get("location"):
+                        base["location"] = nlp_data["location"]
+                    # Merge skills — union of both sets
+                    nlp_skills = nlp_data.get("skills") or []
+                    merged_skills = list(dict.fromkeys(base["skills"] + nlp_skills))
+                    if merged_skills:
+                        base["skills"] = merged_skills
+                    # Use NLP education if it found more entries
+                    if len(nlp_data.get("education") or []) > len(base["education"]):
+                        base["education"] = nlp_data["education"]
+                    # Use NLP experience if it found entries and regex didn't
+                    if nlp_data.get("experience") and not base["experience"]:
+                        base["experience"] = nlp_data["experience"]
+                    if nlp_data.get("totalExperienceYears", 0) > 0 and base["totalExperienceYears"] == 0:
+                        base["totalExperienceYears"] = nlp_data["totalExperienceYears"]
+                    # Merge languages
+                    nlp_langs = nlp_data.get("languages") or []
+                    base["languages"] = list(dict.fromkeys((base.get("languages") or []) + nlp_langs))
+            except Exception as e:
+                logger.warning(f"NLP bridge enrichment failed: {e}")
+
+        return base
 
     def extract_highlights(self, text: str) -> list:
         """

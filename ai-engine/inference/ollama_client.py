@@ -42,7 +42,7 @@ class OllamaClient:
         self.timeout = int(os.getenv("OLLAMA_TIMEOUT", "120"))
         self.max_retries = int(os.getenv("OLLAMA_MAX_RETRIES", "3"))
         self.temperature = float(os.getenv("LLM_TEMPERATURE", "0.1"))
-        self.max_tokens = int(os.getenv("LLM_MAX_TOKENS", "4096"))
+        self.max_tokens = int(os.getenv("LLM_MAX_TOKENS", "1024"))
         self._available: Optional[bool] = None
         self._active_model: Optional[str] = None
 

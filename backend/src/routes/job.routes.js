@@ -1,6 +1,7 @@
 const router = require('express').Router();
 const prisma = require('../config/database');
 const { authenticate } = require('../middleware/auth');
+const jobScraper = require('../services/jobScraper.service');
 
 // GET /api/jobs — public list of active jobs (with pagination + filters)
 router.get('/', async (req, res) => {
@@ -81,6 +82,55 @@ router.get('/:id', authenticate, async (req, res) => {
     res.json(job);
   } catch {
     res.status(500).json({ error: 'Failed to fetch job' });
+  }
+});
+
+// POST /api/jobs/search — job seeker triggers a live scrape for a keyword+location
+// Returns immediately with DB jobs matching the query (scrape runs in background)
+router.post('/search', authenticate, async (req, res) => {
+  const { keyword, location = 'India' } = req.body;
+  if (!keyword || keyword.trim().length < 2) {
+    return res.status(400).json({ error: 'keyword is required' });
+  }
+
+  // Start scrape in background (don't block the response)
+  jobScraper.scrapeFromSearch(keyword.trim(), location.trim()).catch((err) =>
+    console.error('[Search] Background scrape error:', err.message)
+  );
+
+  // Return currently stored matching jobs immediately
+  try {
+    const where = {
+      isActive: true,
+      OR: [
+        { title: { contains: keyword, mode: 'insensitive' } },
+        { description: { contains: keyword, mode: 'insensitive' } },
+        { requiredSkills: { hasSome: [keyword] } },
+      ],
+    };
+    if (location && location.toLowerCase() !== 'india') {
+      where.location = { contains: location, mode: 'insensitive' };
+    }
+
+    const jobs = await prisma.jobPosting.findMany({
+      where,
+      take: 50,
+      orderBy: { postedAt: 'desc' },
+      select: {
+        id: true, title: true, company: true, location: true,
+        salary: true, jobType: true, requiredSkills: true,
+        experienceMin: true, experienceMax: true,
+        source: true, sourceUrl: true, postedAt: true, expiresAt: true,
+      },
+    });
+
+    res.json({
+      jobs,
+      total: jobs.length,
+      message: `Showing ${jobs.length} stored results. Fresh results are being scraped and will appear shortly.`,
+    });
+  } catch (err) {
+    res.status(500).json({ error: 'Search failed' });
   }
 });
 

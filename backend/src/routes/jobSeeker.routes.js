@@ -6,6 +6,7 @@ const {
   getMyCVs,
   getJobMatches,
   triggerMatching,
+  updateCVAnalysis,
 } = require('../controllers/jobSeeker.controller');
 const { deleteCV } = require('../controllers/profile.controller');
 
@@ -23,6 +24,9 @@ router.get('/cv/:cvId/matches', getJobMatches);
 
 // POST /api/job-seeker/cv/:cvId/match
 router.post('/cv/:cvId/match', triggerMatching);
+
+// PUT /api/job-seeker/cv/:cvId/analysis — user edits their parsed CV profile
+router.put('/cv/:cvId/analysis', updateCVAnalysis);
 
 // DELETE /api/job-seeker/cv/:cvId
 router.delete('/cv/:cvId', deleteCV);

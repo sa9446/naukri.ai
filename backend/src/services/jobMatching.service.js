@@ -9,14 +9,17 @@ const aiInference = require('./aiInference.service');
 const logger = require('../config/logger');
 
 // ─── Configurable weights (must sum to 1.0) ──────────────────────────────────
+// Title is primary when candidate has job history (last role drives search intent).
 const WEIGHTS = {
-  skills: parseFloat(process.env.WEIGHT_SKILLS || '0.40'),
-  experience: parseFloat(process.env.WEIGHT_EXPERIENCE || '0.25'),
-  domain: parseFloat(process.env.WEIGHT_DOMAIN || '0.20'),
-  behavioral: parseFloat(process.env.WEIGHT_BEHAVIORAL || '0.15'),
+  title: parseFloat(process.env.WEIGHT_TITLE || '0.50'),
+  skills: parseFloat(process.env.WEIGHT_SKILLS || '0.25'),
+  experience: parseFloat(process.env.WEIGHT_EXPERIENCE || '0.15'),
+  domain: parseFloat(process.env.WEIGHT_DOMAIN || '0.05'),
+  behavioral: parseFloat(process.env.WEIGHT_BEHAVIORAL || '0.05'),
 };
 
-const MIN_MATCH_SCORE = parseFloat(process.env.MIN_MATCH_SCORE || '0.80');
+const MIN_MATCH_SCORE = parseFloat(process.env.MIN_MATCH_SCORE || '0.35');
+const TOP_N_FALLBACK = 10; // always show at least this many matches
 
 class JobMatchingService {
   /**
@@ -66,11 +69,16 @@ class JobMatchingService {
       jobs.map((job) => this._scoreMatch(analysis, cvEmbedding, job))
     );
 
-    // Filter by minimum threshold
-    const qualified = scored.filter((s) => s.matchScore >= MIN_MATCH_SCORE);
-    qualified.sort((a, b) => b.matchScore - a.matchScore);
+    // Sort all by score
+    scored.sort((a, b) => b.matchScore - a.matchScore);
 
-    logger.info(`Found ${qualified.length} jobs with score >= ${MIN_MATCH_SCORE}`);
+    // Filter by threshold, but always keep at least TOP_N_FALLBACK results
+    let qualified = scored.filter((s) => s.matchScore >= MIN_MATCH_SCORE);
+    if (qualified.length < TOP_N_FALLBACK) {
+      qualified = scored.slice(0, TOP_N_FALLBACK);
+    }
+
+    logger.info(`Found ${qualified.length} matched jobs (threshold: ${MIN_MATCH_SCORE})`);
 
     // Upsert matches into database
     const savedMatches = [];
@@ -108,20 +116,29 @@ class JobMatchingService {
    * Returns detailed scores by dimension.
    */
   async _scoreMatch(analysis, cvEmbedding, job) {
+    const lastJobTitle = this._getLastJobTitle(analysis.experienceJson);
+    const titleScore = this._scoreTitle(lastJobTitle, job.title);
     const skillsScore = this._scoreSkills(analysis.skills, job.requiredSkills);
     const experienceScore = this._scoreExperience(analysis.experience, job.experienceMin, job.experienceMax);
     const domainScore = this._scoreDomain(analysis.domainExpertise, job.domain, job.description);
     const behavioralScore = await this._scoreBehavioral(analysis, job, cvEmbedding);
 
-    const matchScore =
-      skillsScore * WEIGHTS.skills +
-      experienceScore * WEIGHTS.experience +
-      domainScore * WEIGHTS.domain +
-      behavioralScore * WEIGHTS.behavioral;
+    const matchScore = lastJobTitle
+      ? titleScore * WEIGHTS.title +
+        skillsScore * WEIGHTS.skills +
+        experienceScore * WEIGHTS.experience +
+        domainScore * WEIGHTS.domain +
+        behavioralScore * WEIGHTS.behavioral
+      : skillsScore * 0.40 +
+        experienceScore * 0.25 +
+        domainScore * 0.20 +
+        behavioralScore * 0.15;
 
     const matchReasons = this._buildMatchReasons(
       analysis,
       job,
+      titleScore,
+      lastJobTitle,
       skillsScore,
       experienceScore,
       domainScore,
@@ -140,6 +157,45 @@ class JobMatchingService {
   }
 
   // ─── Scoring Dimensions ────────────────────────────────────────────────────
+
+  /**
+   * Extract the most recent job title from experienceJson.
+   * Assumes first entry is most recent (or finds "Present" role).
+   */
+  _getLastJobTitle(experienceJson = []) {
+    if (!experienceJson || experienceJson.length === 0) return null;
+    const current = experienceJson.find((e) => e.endDate === 'Present' || e.endDate === null || !e.endDate);
+    return (current || experienceJson[0])?.role || null;
+  }
+
+  /**
+   * Title score: how closely the candidate's last job title matches the job title.
+   * Uses keyword overlap + Levenshtein similarity.
+   */
+  _scoreTitle(lastJobTitle, jobTitle) {
+    if (!lastJobTitle) return 0.4; // neutral if no history
+    const normalize = (s) => s.toLowerCase().replace(/[^a-z0-9 ]/g, '').trim();
+    const a = normalize(lastJobTitle);
+    const b = normalize(jobTitle);
+
+    // Exact or near-exact match
+    if (a === b) return 1.0;
+    const levSim = this._levenshteinSimilarity(a, b);
+    if (levSim > 0.85) return 1.0;
+
+    // Keyword overlap
+    const aWords = new Set(a.split(' ').filter((w) => w.length > 2));
+    const bWords = new Set(b.split(' ').filter((w) => w.length > 2));
+    if (aWords.size === 0 || bWords.size === 0) return levSim;
+
+    let shared = 0;
+    for (const w of aWords) {
+      if (bWords.has(w) || [...bWords].some((bw) => bw.includes(w) || w.includes(bw))) shared++;
+    }
+    const keywordScore = shared / Math.max(aWords.size, bWords.size);
+
+    return Math.max(levSim, keywordScore);
+  }
 
   /**
    * Skills score: Jaccard similarity between candidate skills and required skills.
@@ -274,7 +330,7 @@ class JobMatchingService {
 
   // ─── Match Reason Builder ──────────────────────────────────────────────────
 
-  _buildMatchReasons(analysis, job, skillsScore, experienceScore, domainScore, behavioralScore) {
+  _buildMatchReasons(analysis, job, titleScore, lastJobTitle, skillsScore, experienceScore, domainScore, behavioralScore) {
     const normalize = (s) => s.toLowerCase().trim();
     const reqNorm = (job.requiredSkills || []).map(normalize);
     const candNorm = (analysis.skills || []).map(normalize);
@@ -287,6 +343,12 @@ class JobMatchingService {
     );
 
     return {
+      title: {
+        score: Math.round(titleScore * 100),
+        candidateLastRole: lastJobTitle || 'Not available',
+        jobTitle: job.title,
+        summary: titleScore >= 0.7 ? 'Strong role alignment with last position' : titleScore >= 0.4 ? 'Moderate role similarity' : 'Different role from last position',
+      },
       skills: {
         score: Math.round(skillsScore * 100),
         matched: matchedSkills,

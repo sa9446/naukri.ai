@@ -1,11 +1,11 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import Navbar from '@/components/Navbar';
 import JobMatchCard from '@/components/JobMatchCard';
 import { jobSeekerAPI } from '@/lib/api';
-import { RefreshCw, FileText, ChevronRight } from 'lucide-react';
+import { RefreshCw, FileText, ChevronRight, SlidersHorizontal, X } from 'lucide-react';
 
 interface JobMatch {
   matchId: string;
@@ -15,6 +15,7 @@ interface JobMatch {
   domainScore: number;
   behavioralScore: number;
   matchReasons: {
+    title?: { score: number; candidateLastRole: string; jobTitle: string; summary: string };
     skills: { score: number; matched: string[]; missing: string[]; summary: string };
     experience: { score: number; candidateYears: number; requiredRange: string; summary: string };
     domain: { score: number; candidateDomains: string[]; jobDomain: string; summary: string };
@@ -30,6 +31,10 @@ interface JobMatch {
     salary?: string;
     jobType?: string;
     requiredSkills: string[];
+    domain?: string;
+    description?: string;
+    experienceMin?: number;
+    experienceMax?: number;
     source: string;
     sourceUrl?: string;
     postedAt: string;
@@ -53,6 +58,28 @@ export default function JobMatchesPage() {
   const [refreshing, setRefreshing] = useState(false);
   const [cvs, setCvs] = useState<CV[]>([]);
   const [cvsLoading, setCvsLoading] = useState(false);
+
+  // Filters
+  const [filterDomain, setFilterDomain] = useState('');
+  const [filterLocation, setFilterLocation] = useState('');
+  const [filterSkill, setFilterSkill] = useState('');
+
+  // Derived filter options from loaded matches
+  const domains = useMemo(() => [...new Set(matches.map(m => m.job.domain).filter(Boolean))].sort() as string[], [matches]);
+  const locations = useMemo(() => [...new Set(matches.map(m => m.job.location).filter(Boolean))].sort() as string[], [matches]);
+  const skills = useMemo(() => {
+    const all = matches.flatMap(m => m.job.requiredSkills || []);
+    return [...new Set(all)].sort();
+  }, [matches]);
+
+  const filtered = useMemo(() => matches.filter(m => {
+    if (filterDomain && m.job.domain !== filterDomain) return false;
+    if (filterLocation && m.job.location !== filterLocation) return false;
+    if (filterSkill && !(m.job.requiredSkills || []).some(s => s.toLowerCase() === filterSkill.toLowerCase())) return false;
+    return true;
+  }), [matches, filterDomain, filterLocation, filterSkill]);
+
+  const hasFilters = filterDomain || filterLocation || filterSkill;
 
   // If no cvId, fetch the list of CVs so the user can pick one
   useEffect(() => {
@@ -88,6 +115,9 @@ export default function JobMatchesPage() {
     try {
       await jobSeekerAPI.triggerMatching(cvId);
       await fetchMatches();
+    } catch (err: unknown) {
+      const e = err as { response?: { data?: { error?: string } } };
+      console.error('Refresh matching failed:', e.response?.data?.error || err);
     } finally {
       setRefreshing(false);
     }
@@ -145,7 +175,7 @@ export default function JobMatchesPage() {
           <div>
             <h1 className="text-2xl font-bold text-gray-900">Job Matches</h1>
             <p className="text-sm text-gray-500 mt-1">
-              Only showing matches with <strong>80%+</strong> compatibility score
+              Top matches ranked by role alignment
             </p>
           </div>
           <div className="flex items-center gap-3">
@@ -166,6 +196,63 @@ export default function JobMatchesPage() {
           </div>
         </div>
 
+        {/* Filters */}
+        {!loading && matches.length > 0 && (
+          <div className="bg-white border rounded-2xl p-4 space-y-3">
+            <div className="flex items-center justify-between">
+              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide flex items-center gap-1.5">
+                <SlidersHorizontal size={13} /> Filter Matches
+              </p>
+              {hasFilters && (
+                <button
+                  onClick={() => { setFilterDomain(''); setFilterLocation(''); setFilterSkill(''); }}
+                  className="text-xs text-red-500 hover:text-red-700 flex items-center gap-1"
+                >
+                  <X size={11} /> Clear all
+                </button>
+              )}
+            </div>
+            <div className="grid grid-cols-3 gap-3">
+              <div>
+                <label className="text-xs text-gray-400 mb-1 block">Domain</label>
+                <select
+                  value={filterDomain}
+                  onChange={e => setFilterDomain(e.target.value)}
+                  className="w-full border rounded-lg px-2.5 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+                >
+                  <option value="">All domains</option>
+                  {domains.map(d => <option key={d} value={d}>{d}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="text-xs text-gray-400 mb-1 block">Location</label>
+                <select
+                  value={filterLocation}
+                  onChange={e => setFilterLocation(e.target.value)}
+                  className="w-full border rounded-lg px-2.5 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+                >
+                  <option value="">All locations</option>
+                  {locations.map(l => <option key={l} value={l}>{l}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="text-xs text-gray-400 mb-1 block">Required Skill</label>
+                <select
+                  value={filterSkill}
+                  onChange={e => setFilterSkill(e.target.value)}
+                  className="w-full border rounded-lg px-2.5 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-primary-500"
+                >
+                  <option value="">All skills</option>
+                  {skills.map(s => <option key={s} value={s}>{s}</option>)}
+                </select>
+              </div>
+            </div>
+            {hasFilters && (
+              <p className="text-xs text-gray-400">{filtered.length} of {matches.length} matches shown</p>
+            )}
+          </div>
+        )}
+
         {loading ? (
           <div className="text-center py-20 text-gray-400">Loading matches...</div>
         ) : matches.length === 0 ? (
@@ -173,9 +260,14 @@ export default function JobMatchesPage() {
             <p className="font-medium">No matches found yet.</p>
             <p className="text-sm mt-1">Click "Re-run Matching" or wait for the background job to complete.</p>
           </div>
+        ) : filtered.length === 0 ? (
+          <div className="bg-white rounded-2xl border p-10 text-center text-gray-400">
+            <p className="font-medium">No matches for these filters.</p>
+            <button onClick={() => { setFilterDomain(''); setFilterLocation(''); setFilterSkill(''); }} className="text-sm text-primary-600 mt-2 hover:underline">Clear filters</button>
+          </div>
         ) : (
           <div className="grid gap-4">
-            {matches.map((m) => (
+            {filtered.map((m) => (
               <JobMatchCard key={m.matchId} {...m} />
             ))}
           </div>

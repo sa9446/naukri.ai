@@ -1,15 +1,15 @@
 """
 INFERENCE MODULE — Prompt Templates
-All prompts used by the local LLM (Mistral/Phi-3 via Ollama).
+All prompts used by the local LLM (naukri-cv-parser / phi3:mini via Ollama).
 Designed for low temperature (0.1) deterministic JSON output.
-Uses Mistral Instruct format: [INST] ... [/INST]
+Uses Phi-3 Instruct format: <|user|>...<|end|>\n<|assistant|>
 """
 
 
 class PromptTemplates:
     """
     Central registry of all prompt templates.
-    Format is compatible with Mistral Instruct, Phi-3, and Llama-3 Instruct.
+    Format is compatible with Phi-3 Mini Instruct and the fine-tuned naukri-cv-parser.
     """
 
     @staticmethod
@@ -19,7 +19,8 @@ class PromptTemplates:
         Extracts all structured fields from raw CV text.
         Temperature: 0.1 for deterministic JSON.
         """
-        return f"""[INST] Extract structured data from this CV. Return ONLY valid JSON, no extra text.
+        return f"""<|user|>
+Extract structured data from this CV. Return ONLY valid JSON, no extra text.
 
 IMPORTANT:
 - Extract EVERY job from the experience section (list all roles, most recent first).
@@ -66,8 +67,10 @@ JSON structure to return:
 }}
 
 CV TEXT:
-{cv_text[:5000]}
-[/INST]"""
+{cv_text[:3000]}
+<|end|>
+<|assistant|>
+"""
 
     @staticmethod
     def trait_inference_prompt(experience_summary: str) -> str:
@@ -75,7 +78,8 @@ CV TEXT:
         Infer quantified trait scores from CV experience.
         Returns scores 0.0 - 1.0 with evidence.
         """
-        return f"""[INST] You are an organizational psychologist specializing in CV analysis.
+        return f"""<|user|>
+You are an organizational psychologist specializing in CV analysis.
 Analyze this professional experience and score each trait from 0.0 to 1.0.
 
 Score definitions:
@@ -103,7 +107,9 @@ Return ONLY valid JSON:
 
 EXPERIENCE SUMMARY:
 {experience_summary[:4000]}
-[/INST]"""
+<|end|>
+<|assistant|>
+"""
 
     @staticmethod
     def job_fit_explanation_prompt(candidate_summary: str, job_summary: str) -> str:
@@ -111,7 +117,8 @@ EXPERIENCE SUMMARY:
         Generate a human-readable fit explanation between candidate and job.
         Used AFTER scoring to add qualitative context.
         """
-        return f"""[INST] You are a senior recruiter. Briefly explain the fit between this candidate and job.
+        return f"""<|user|>
+You are a senior recruiter. Briefly explain the fit between this candidate and job.
 
 Return ONLY valid JSON:
 {{
@@ -127,12 +134,15 @@ CANDIDATE:
 
 JOB:
 {job_summary[:2000]}
-[/INST]"""
+<|end|>
+<|assistant|>
+"""
 
     @staticmethod
     def skill_gap_analysis_prompt(candidate_skills: list, required_skills: list) -> str:
         """Analyze skill gaps between candidate and job requirements."""
-        return f"""[INST] Compare these skill sets and identify gaps.
+        return f"""<|user|>
+Compare these skill sets and identify gaps.
 
 Return ONLY valid JSON:
 {{
@@ -144,12 +154,15 @@ Return ONLY valid JSON:
 
 CANDIDATE SKILLS: {candidate_skills}
 REQUIRED SKILLS: {required_skills}
-[/INST]"""
+<|end|>
+<|assistant|>
+"""
 
     @staticmethod
     def domain_classification_prompt(cv_text: str) -> str:
         """Classify which industry domains are present in a CV."""
-        return f"""[INST] Identify the top 3 industry domains from this CV text.
+        return f"""<|user|>
+Identify the top 3 industry domains from this CV text.
 
 Valid domains: FinTech, Healthcare, E-commerce, SaaS, AI/ML, Cloud/DevOps,
 EdTech, Gaming, Logistics, Automotive, Telecom, Media, Government, Consulting
@@ -163,7 +176,9 @@ Return ONLY valid JSON:
 
 CV TEXT (excerpt):
 {cv_text[:3000]}
-[/INST]"""
+<|end|>
+<|assistant|>
+"""
 
     @staticmethod
     def experience_calculation_prompt(experience_text: str) -> str:
@@ -171,7 +186,8 @@ CV TEXT (excerpt):
         Dedicated prompt for accurate experience calculation.
         Handles overlapping dates, career gaps, and progression.
         """
-        return f"""[INST] Calculate total professional experience from this work history.
+        return f"""<|user|>
+Calculate total professional experience from this work history.
 Sum durations carefully. Do not double-count overlapping periods.
 If a role says "Present" or "Current", use today's date (2026-03).
 
@@ -193,7 +209,9 @@ Return ONLY valid JSON:
 
 WORK HISTORY:
 {experience_text[:4000]}
-[/INST]"""
+<|end|>
+<|assistant|>
+"""
 
 
 # Module singleton

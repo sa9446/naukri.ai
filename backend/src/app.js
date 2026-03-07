@@ -105,6 +105,16 @@ app.listen(PORT, () => {
     }
   });
   logger.info('[Cron] Job refresh scheduled every 6 hours');
+
+  // Delete expired scraped jobs daily at 2am
+  cron.schedule('0 2 * * *', async () => {
+    try {
+      await jobScraper.deleteExpiredJobs();
+    } catch (err) {
+      logger.error('[Cron] Expired job cleanup failed:', err.message);
+    }
+  });
+  logger.info('[Cron] Expired job cleanup scheduled daily at 2am');
 });
 
 module.exports = app;

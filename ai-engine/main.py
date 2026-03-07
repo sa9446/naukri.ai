@@ -145,21 +145,10 @@ async def parse_cv(
         ollama_ok = await ollama_client.is_available()
         if ollama_ok:
             try:
-                # Parallel: CV parsing + experience calculation
+                # CV parsing via LLM
                 cv_prompt = prompts.cv_parsing_prompt(truncated)
                 llm_output = await ollama_client.generate_json(cv_prompt)
                 logger.debug("LLM CV parsing complete")
-
-                # Trait inference on experience section
-                exp_text = "\n".join(
-                    f"{e.get('role', '')} at {e.get('company', '')}: {e.get('description', '')}"
-                    for e in (llm_output.get("experience", []) or [])[:5]
-                )
-                if exp_text.strip():
-                    trait_prompt = prompts.trait_inference_prompt(exp_text)
-                    trait_output = await ollama_client.generate_json(trait_prompt)
-                    if trait_output:
-                        llm_output["traitScores"] = trait_output
 
             except Exception as e:
                 logger.error(f"LLM inference failed: {e}. Falling back to rules.")
